@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS-Tank Terrain Demo</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">JS-Tank Terrain Demo</div>
+    <div id="controls">
+        <div>Mouse: Left click + drag to rotate</div>
+        <div>Mouse: Right click + drag to pan</div>
+        <div>Mouse wheel: Zoom in/out</div>
+        <button id="regenerate">Regenerate Terrain</button>
+        <select id="renderMode">
+            <option value="solid">Solid</option>
+            <option value="wireframe">Wireframe</option>
+            <option value="both">Both</option>
+        </select>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // Terrain configuration
+        const config = {
+            gridSize: 128, // Number of vertices per side
+            size: 500,     // Physical size (arbitrary units)
+            maxHeight: 60, // Maximum terrain height
+            seed: Math.random() * 1000, // Random seed
+        };
+
+        // Setup renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x87ceeb); // Sky blue background
+        document.body.appendChild(renderer.domElement);
+
+        // Setup scene
+        const scene = new THREE.Scene();
+        
+        // Setup camera
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 100, 200);
+        camera.lookAt(0, 0, 0);
+
+        // Setup orbit controls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = false;
+        controls.maxPolarAngle = Math.PI / 2;
+
+        // Lighting
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(1, 1, 1);
+        scene.add(directionalLight);
+        
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        // Terrain mesh holder
+        let terrainMesh;
+        let wireframeMesh;
+
+        // Initialize noise generator
+        let simplex = new SimplexNoise(config.seed.toString());
+
+        // Generate terrain height map
+        function generateTerrainGrid() {
+            const grid = new Float32Array(config.gridSize * config.gridSize);
+            
+            for (let y = 0; y < config.gridSize; y++) {
+                for (let x = 0; x < config.gridSize; x++) {
+                    const index = y * config.gridSize + x;
+                    
+                    // Multi-octave noise for natural-looking terrain
+                    let elevation = 0;
+                    
+                    // Base hills (large features)
+                    elevation += simplex.noise2D(x * 0.01, y * 0.01) * 0.6;
+                    
+                    // Medium details
+                    elevation += simplex.noise2D(x * 0.03, y * 0.03) * 0.3;
+                    
+                    // Fine details
+                    elevation += simplex.noise2D(x * 0.1, y * 0.1) * 0.1;
+                    
+                    // Normalize to 0-1 range (approximately)
+                    elevation = (elevation + 1) * 0.5;
+                    
+                    // Scale to desired height
+                    grid[index] = elevation * config.maxHeight;
+                }
+            }
+            
+            return {
+                heightMap: grid,
+                width: config.gridSize,
+                height: config.gridSize,
+                cellSize: config.size / (config.gridSize - 1)
+            };
+        }
+
+        // Create terrain mesh from grid data
+        function createTerrainMesh(terrainData) {
+            // Create geometry
+            const geometry = new THREE.PlaneGeometry(
+                config.size, 
+                config.size, 
+                terrainData.width - 1, 
+                terrainData.height - 1
+            );
+            
+            // Apply height map to vertices
+            const vertices = geometry.attributes.position.array;
+            for (let i = 0; i < terrainData.width * terrainData.height; i++) {
+                // Vertex position is stored as [x, y, z, x, y, z, ...] 
+                // where y is the up axis in Three.js
+                vertices[i * 3 + 1] = terrainData.heightMap[i];
+            }
+            
+            geometry.computeVertexNormals();
+            
+            // Create material with color variation based on height
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                flatShading: false,
+                metalness: 0.0,
+                roughness: 0.8
+            });
+            
+            // Add vertex colors based on height
+            const colors = [];
+            
+            for (let i = 0; i < terrainData.width * terrainData.height; i++) {
+                const height = terrainData.heightMap[i];
+                let color = new THREE.Color();
+                
+                // Water (blue)
+                if (height < config.maxHeight * 0.2) {
+                    color.setRGB(0.2, 0.3, 0.9);
+                }
+                // Sand (tan)
+                else if (height < config.maxHeight * 0.3) {
+                    color.setRGB(0.76, 0.7, 0.5);
+                }
+                // Grass (green)
+                else if (height < config.maxHeight * 0.6) {
+                    color.setRGB(0.3, 0.6, 0.2);
+                }
+                // Mountain (brown/gray)
+                else if (height < config.maxHeight * 0.8) {
+                    color.setRGB(0.5, 0.5, 0.4);
+                }
+                // Snow cap (white)
+                else {
+                    color.setRGB(0.9, 0.9, 0.95);
+                }
+                
+                colors.push(color.r, color.g, color.b);
+            }
+            
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            
+            // Create new terrain mesh
+            const mesh = new THREE.Mesh(geometry, material);
+            
+            // Rotate to horizontal plane (Three.js PlaneGeometry is vertical by default)
+            mesh.rotation.x = -Math.PI / 2;
+            
+            // Center the mesh
+            mesh.position.set(0, 0, 0);
+            
+            return mesh;
+        }
+
+        // Create wireframe version
+        function createWireframeMesh(terrainMesh) {
+            const wireGeom = terrainMesh.geometry.clone();
+            const wireMat = new THREE.MeshBasicMaterial({
+                color: 0x000000,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.1
+            });
+            const wire = new THREE.Mesh(wireGeom, wireMat);
+            wire.rotation.x = -Math.PI / 2;
+            return wire;
+        }
+
+        // Generate and display terrain
+        function initTerrain() {
+            // Remove existing terrain if any
+            if (terrainMesh) {
+                scene.remove(terrainMesh);
+                terrainMesh.geometry.dispose();
+                terrainMesh.material.dispose();
+            }
+            
+            if (wireframeMesh) {
+                scene.remove(wireframeMesh);
+                wireframeMesh.geometry.dispose();
+                wireframeMesh.material.dispose();
+            }
+            
+            // Generate new terrain
+            const terrainData = generateTerrainGrid();
+            
+            // Create and add terrain mesh
+            terrainMesh = createTerrainMesh(terrainData);
+            scene.add(terrainMesh);
+            
+            // Create wireframe
+            wireframeMesh = createWireframeMesh(terrainMesh);
+            wireframeMesh.visible = false; // Hide by default
+            scene.add(wireframeMesh);
+            
+            updateRenderMode();
+        }
+
+        // Update rendering mode (solid, wireframe, both)
+        function updateRenderMode() {
+            const mode = document.getElementById('renderMode').value;
+            
+            if (terrainMesh && wireframeMesh) {
+                switch (mode) {
+                    case 'solid':
+                        terrainMesh.visible = true;
+                        wireframeMesh.visible = false;
+                        break;
+                    case 'wireframe':
+                        terrainMesh.visible = false;
+                        wireframeMesh.visible = true;
+                        wireframeMesh.material.opacity = 0.8;
+                        break;
+                    case 'both':
+                        terrainMesh.visible = true;
+                        wireframeMesh.visible = true;
+                        wireframeMesh.material.opacity = 0.2;
+                        break;
+                }
+            }
+        }
+
+        // Event listeners
+        document.getElementById('regenerate').addEventListener('click', () => {
+            config.seed = Math.random() * 1000;
+            simplex = new SimplexNoise(config.seed.toString());
+            initTerrain();
+        });
+        
+        document.getElementById('renderMode').addEventListener('change', updateRenderMode);
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Initialize
+        initTerrain();
+        animate();
+    </script>
+</body>
+</html>
