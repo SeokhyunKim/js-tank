@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JS-Tank Terrain Demo - Enhanced Natural Terrain</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: white;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 14px;
+        pointer-events: none;
+      }
+      #controls {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        color: white;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 14px;
+      }
+      .slider-container {
+        margin-top: 10px;
+      }
+      .slider-container label {
+        display: inline-block;
+        width: 150px;
+      }
+      .slider-container input {
+        width: 120px;
+        vertical-align: middle;
+      }
+      .slider-container span {
+        display: inline-block;
+        width: 40px;
+        text-align: right;
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@v0.147.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@v0.147.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="info">JS-Tank Terrain Demo - Enhanced Natural Terrain</div>
+    <div id="controls">
+      <div>Mouse: Left click + drag to rotate</div>
+      <div>Mouse: Right click + drag to pan</div>
+      <div>Mouse wheel: Zoom in/out</div>
+
+      <div class="slider-container">
+        <label for="heightScale">Height Scale:</label>
+        <input
+          type="range"
+          id="heightScale"
+          min="20"
+          max="200"
+          value="80"
+          step="10"
+        />
+        <span id="heightScaleValue">80</span>
+      </div>
+
+      <div class="slider-container">
+        <label for="erosionAmount">Erosion Amount:</label>
+        <input
+          type="range"
+          id="erosionAmount"
+          min="0"
+          max="10000"
+          value="5000"
+          step="1000"
+        />
+        <span id="erosionValue">5000</span>
+      </div>
+
+      <button id="regenerate">Regenerate Terrain</button>
+      <select id="renderMode">
+        <option value="solid">Solid</option>
+        <option value="wireframe">Wireframe</option>
+        <option value="both">Both</option>
+      </select>
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      // Terrain configuration
+      const config = {
+        gridSize: 128, // Number of vertices per side
+        size: 500, // Physical size (arbitrary units)
+        maxHeight: 80, // Maximum terrain height
+        seed: Math.random() * 1000,
+        erosionIterations: 5000,
+      };
+
+      // Setup renderer
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x87ceeb); // Sky blue background
+      document.body.appendChild(renderer.domElement);
+
+      // Setup scene
+      const scene = new THREE.Scene();
+
+      // Add axes helper to debug orientation
+      const axesHelper = new THREE.AxesHelper(250);
+      scene.add(axesHelper);
+
+      // Setup camera
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        2000
+      );
+      camera.position.set(250, 200, 250);
+      camera.lookAt(0, 0, 0);
+
+      // Setup orbit controls
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.1;
+      controls.screenSpacePanning = false;
+
+      // Lighting
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      directionalLight.position.set(1, 1, 1);
+      scene.add(directionalLight);
+
+      const ambientLight = new THREE.AmbientLight(0x606060);
+      scene.add(ambientLight);
+
+      // Terrain mesh holder
+      let terrainMesh;
+      let wireframeMesh;
+
+      // This is an improved noise function that uses a simple implementation of Perlin-like noise
+      function improvedPerlinNoise(x, y, seed) {
+        // Hash function to generate random gradients
+        function hash(x, y) {
+          const h = ((x * 73) ^ (y * 149)) + seed;
+          return h ^ (h >>> 9);
+        }
+
+        // Get grid cell coordinates
+        const x0 = Math.floor(x);
+        const y0 = Math.floor(y);
+        const x1 = x0 + 1;
+        const y1 = y0 + 1;
+
+        // Compute dot products between gradients and distance vectors
+        function dot(hash, x, y) {
+          // Convert hash to normalized gradient vector
+          const h = hash & 7;
+          const gradX = (h < 4 ? 1 : -1) * (h & 1 ? 1 : 0);
+          const gradY = (h < 4 ? 1 : -1) * (h & 2 ? 1 : 0);
+          return gradX * x + gradY * y;
+        }
+
+        // Generate pseudo-random gradients
+        const g00 = hash(x0, y0);
+        const g10 = hash(x1, y0);
+        const g01 = hash(x0, y1);
+        const g11 = hash(x1, y1);
+
+        // Compute distances from cell corners
+        const dx0 = x - x0;
+        const dy0 = y - y0;
+        const dx1 = x - x1;
+        const dy1 = y - y1;
+
+        // Compute dot products
+        const d00 = dot(g00, dx0, dy0);
+        const d10 = dot(g10, dx1, dy0);
+        const d01 = dot(g01, dx0, dy1);
+        const d11 = dot(g11, dx1, dy1);
+
+        // Interpolation weights
+        const sx = dx0 * dx0 * (3 - 2 * dx0);
+        const sy = dy0 * dy0 * (3 - 2 * dy0);
+
+        // Bilinear interpolation
+        const vx0 = d00 + sx * (d10 - d00);
+        const vx1 = d01 + sx * (d11 - d01);
+        return vx0 + sy * (vx1 - vx0);
+      }
+
+      // Generate multi-octave noise for more natural terrain
+      function generateNaturalTerrain(x, y, seed) {
+        // Use multiple octaves of noise with decreasing amplitude (persistence)
+        // and increasing frequency (lacunarity)
+        let amplitude = 1.0;
+        let frequency = 0.005;
+        let persistence = 0.5;
+        let lacunarity = 2.0;
+        let octaves = 6;
+
+        let noise = 0;
+        let totalAmplitude = 0;
+
+        for (let i = 0; i < octaves; i++) {
+          noise +=
+            improvedPerlinNoise(x * frequency, y * frequency, seed + i * 1000) *
+            amplitude;
+          totalAmplitude += amplitude;
+          amplitude *= persistence;
+          frequency *= lacunarity;
+        }
+
+        // Normalize the result
+        return noise / totalAmplitude;
+      }
+
+      // Erosion simulation to create more realistic terrain features
+      function simulateErosion(heightMap, width, height, iterations) {
+        const droplets = iterations || 5000;
+        const erosionStrength = 0.3;
+        const depositionStrength = 0.3;
+        const evaporationRate = 0.02;
+        const gravity = 4.0;
+
+        function getHeight(x, y) {
+          x = Math.max(0, Math.min(width - 1, x));
+          y = Math.max(0, Math.min(height - 1, y));
+          return heightMap[y * width + x];
+        }
+
+        function setHeight(x, y, value) {
+          if (x >= 0 && x < width && y >= 0 && y < height) {
+            heightMap[y * width + x] = value;
+          }
+        }
+
+        // Run erosion simulation
+        for (let i = 0; i < droplets; i++) {
+          // Random starting position
+          let x = Math.random() * (width - 1);
+          let y = Math.random() * (height - 1);
+          let waterVolume = 1.0;
+          let sediment = 0.0;
+          let dirX = 0;
+          let dirY = 0;
+
+          // Continue until water evaporates or leaves the map
+          for (
+            let lifetime = 0;
+            lifetime < 30 && waterVolume > 0.01;
+            lifetime++
+          ) {
+            // Get current grid cell coordinates
+            const cellX = Math.floor(x);
+            const cellY = Math.floor(y);
+
+            // Check if we're still on the map
+            if (
+              cellX < 0 ||
+              cellX >= width - 1 ||
+              cellY < 0 ||
+              cellY >= height - 1
+            ) {
+              break;
+            }
+
+            // Calculate gradient at current position
+            const hL = getHeight(cellX - 1, cellY);
+            const hR = getHeight(cellX + 1, cellY);
+            const hU = getHeight(cellX, cellY - 1);
+            const hD = getHeight(cellX, cellY + 1);
+
+            // Calculate gradient (steepest descent)
+            const gradX = (hR - hL) * 0.5;
+            const gradY = (hD - hU) * 0.5;
+
+            // Calculate gradient magnitude
+            const gradMag = Math.sqrt(gradX * gradX + gradY * gradY);
+
+            // Update direction with inertia and gravity
+            if (gradMag > 0.01) {
+              dirX = dirX * 0.3 - (gradX / gradMag) * 0.7;
+              dirY = dirY * 0.3 - (gradY / gradMag) * 0.7;
+            }
+
+            // Normalize direction
+            const dirMag = Math.sqrt(dirX * dirX + dirY * dirY);
+            if (dirMag > 0.01) {
+              dirX /= dirMag;
+              dirY /= dirMag;
+            } else {
+              // Random direction if gradient is too small
+              const angle = Math.random() * Math.PI * 2;
+              dirX = Math.cos(angle);
+              dirY = Math.sin(angle);
+            }
+
+            // Move to new position
+            x += dirX;
+            y += dirY;
+
+            // Get new position grid cell
+            const newCellX = Math.floor(x);
+            const newCellY = Math.floor(y);
+
+            // Check if we're still on the map
+            if (
+              newCellX < 0 ||
+              newCellX >= width - 1 ||
+              newCellY < 0 ||
+              newCellY >= height - 1
+            ) {
+              break;
+            }
+
+            // Get heights at old and new positions
+            const oldHeight = getHeight(cellX, cellY);
+            const newHeight = getHeight(newCellX, newCellY);
+
+            // Calculate height difference
+            const heightDiff = newHeight - oldHeight;
+
+            // Erosion and deposition logic
+            if (heightDiff > 0) {
+              // Moving uphill - deposit sediment
+              const deposit = Math.min(sediment, heightDiff);
+              sediment -= deposit;
+              setHeight(cellX, cellY, oldHeight + deposit * depositionStrength);
+            } else {
+              // Moving downhill or flat - erode soil
+              const erosion = Math.min(
+                -heightDiff * erosionStrength,
+                gravity * waterVolume
+              );
+              sediment += erosion;
+              setHeight(newCellX, newCellY, newHeight - erosion);
+            }
+
+            // Water evaporates as it moves
+            waterVolume *= 1.0 - evaporationRate;
+          }
+        }
+
+        return heightMap;
+      }
+
+      // Replace the current terrain generation function with this improved version
+      function generateTerrainGrid() {
+        const grid = new Float32Array(config.gridSize * config.gridSize);
+
+        // Generate base terrain with multi-octave noise
+        for (let z = 0; z < config.gridSize; z++) {
+          for (let x = 0; x < config.gridSize; x++) {
+            const index = z * config.gridSize + x;
+
+            // Generate base terrain height
+            let height = generateNaturalTerrain(x, z, config.seed);
+
+            // Apply some terrain shaping - use normalized coordinates
+            const nx = (x / config.gridSize) * 2 - 1; // -1 to 1
+            const nz = (z / config.gridSize) * 2 - 1; // -1 to 1
+            const distFromCenter = Math.sqrt(nx * nx + nz * nz);
+
+            // Create island-like effect (higher in the middle, lower at edges)
+            if (distFromCenter < 0.8) {
+              // Gradual slope down
+              height = height * (1.0 - Math.pow(distFromCenter / 0.8, 2) * 0.5);
+            } else {
+              // Sharp drop at the edges - water
+              height =
+                height *
+                  (1.0 - Math.pow((distFromCenter - 0.8) / 0.2, 2) * 0.8) -
+                0.3;
+            }
+
+            // Add some additional features
+
+            // Occasional mountain peak (based on noise value exceeding threshold)
+            const mountainChance = generateNaturalTerrain(
+              x * 0.05,
+              z * 0.05,
+              config.seed + 500
+            );
+            if (mountainChance > 0.7) {
+              const peakStrength = (mountainChance - 0.7) / 0.3; // 0 to 1
+              height += peakStrength * 1.2;
+            }
+
+            // River valleys (based on another noise function)
+            const riverValue = generateNaturalTerrain(
+              x * 0.02,
+              z * 0.02,
+              config.seed + 1000
+            );
+            if (riverValue > 0.7 && riverValue < 0.75) {
+              height -= 0.3;
+            }
+
+            // Scale the height
+            grid[index] = height * config.maxHeight;
+          }
+        }
+
+        // Apply erosion simulation for more natural features
+        if (config.erosionIterations > 0) {
+          simulateErosion(
+            grid,
+            config.gridSize,
+            config.gridSize,
+            config.erosionIterations
+          );
+        }
+
+        return {
+          heightMap: grid,
+          width: config.gridSize,
+          height: config.gridSize,
+        };
+      }
+
+      // Create terrain mesh from grid data
+      function createTerrainMesh(terrainData) {
+        // 1. Create a flat plane geometry with the desired resolution
+        const geometry = new THREE.PlaneGeometry(
+          config.size,
+          config.size,
+          config.gridSize - 1,
+          config.gridSize - 1
+        );
+
+        // 2. IMPORTANT: First rotate the plane to be horizontal (XZ plane)
+        geometry.rotateX(-Math.PI / 2);
+
+        // 3. Get access to the vertex positions
+        const positionAttribute = geometry.getAttribute("position");
+
+        // Track height range for debugging
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+
+        // 4. Apply height values to the Y component (up direction)
+        for (let i = 0; i < positionAttribute.count; i++) {
+          // Get the current position
+          const x = positionAttribute.getX(i);
+          const y = positionAttribute.getY(i);
+          const z = positionAttribute.getZ(i);
+
+          // Convert world coordinates to grid coordinates
+          const gridX = Math.round(
+            (x / config.size + 0.5) * (config.gridSize - 1)
+          );
+          const gridZ = Math.round(
+            (z / config.size + 0.5) * (config.gridSize - 1)
+          );
+
+          // Ensure grid coordinates are within bounds
+          if (
+            gridX >= 0 &&
+            gridX < config.gridSize &&
+            gridZ >= 0 &&
+            gridZ < config.gridSize
+          ) {
+            const heightIndex = gridZ * config.gridSize + gridX;
+            const height = terrainData.heightMap[heightIndex];
+
+            // Apply height to Y coordinate (up direction after rotation)
+            positionAttribute.setY(i, height);
+
+            // Track min/max height for debugging
+            minHeight = Math.min(minHeight, height);
+            maxHeight = Math.max(maxHeight, height);
+          }
+        }
+
+        console.log(
+          `Height range: ${minHeight.toFixed(2)} to ${maxHeight.toFixed(2)}`
+        );
+
+        // 5. Update normals for proper lighting
+        geometry.computeVertexNormals();
+
+        // 6. Create material with color variation based on height
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          flatShading: false,
+          metalness: 0.0,
+          roughness: 0.8,
+        });
+
+        // 7. Add vertex colors based on height
+        const colors = [];
+
+        for (let i = 0; i < positionAttribute.count; i++) {
+          const height = positionAttribute.getY(i);
+          let color = new THREE.Color();
+
+          // Deep water (dark blue)
+          if (height < minHeight + (maxHeight - minHeight) * 0.1) {
+            color.setRGB(0.0, 0.1, 0.5);
+          }
+          // Water (blue)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.2) {
+            color.setRGB(0.0, 0.3, 0.8);
+          }
+          // Shoreline (tan)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.25) {
+            color.setRGB(0.76, 0.7, 0.5);
+          }
+          // Lowland grass (light green)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.4) {
+            color.setRGB(0.3, 0.6, 0.2);
+          }
+          // Highland grass (darker green)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.6) {
+            color.setRGB(0.2, 0.5, 0.1);
+          }
+          // Mountain (brown/gray)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.85) {
+            color.setRGB(0.5, 0.4, 0.3);
+          }
+          // Mountain top (gray rock)
+          else if (height < minHeight + (maxHeight - minHeight) * 0.95) {
+            color.setRGB(0.5, 0.5, 0.5);
+          }
+          // Snow cap (white)
+          else {
+            color.setRGB(0.9, 0.9, 0.95);
+          }
+
+          colors.push(color.r, color.g, color.b);
+        }
+
+        geometry.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(colors, 3)
+        );
+
+        // 8. Create and return the mesh
+        const mesh = new THREE.Mesh(geometry, material);
+
+        return mesh;
+      }
+
+      // Create wireframe version
+      function createWireframeMesh(terrainMesh) {
+        const wireGeom = terrainMesh.geometry.clone();
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: 0x000000,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.2,
+        });
+        const wire = new THREE.Mesh(wireGeom, wireMat);
+        return wire;
+      }
+
+      // Generate and display terrain
+      function initTerrain() {
+        // Remove existing terrain if any
+        if (terrainMesh) {
+          scene.remove(terrainMesh);
+          terrainMesh.geometry.dispose();
+          terrainMesh.material.dispose();
+        }
+
+        if (wireframeMesh) {
+          scene.remove(wireframeMesh);
+          wireframeMesh.geometry.dispose();
+          wireframeMesh.material.dispose();
+        }
+
+        // Generate new terrain
+        const terrainData = generateTerrainGrid();
+
+        // Create and add terrain mesh
+        terrainMesh = createTerrainMesh(terrainData);
+        scene.add(terrainMesh);
+
+        // Create wireframe
+        wireframeMesh = createWireframeMesh(terrainMesh);
+        wireframeMesh.visible = false; // Hide by default
+        scene.add(wireframeMesh);
+
+        updateRenderMode();
+      }
+
+      // Update rendering mode (solid, wireframe, both)
+      function updateRenderMode() {
+        const mode = document.getElementById("renderMode").value;
+
+        if (terrainMesh && wireframeMesh) {
+          switch (mode) {
+            case "solid":
+              terrainMesh.visible = true;
+              wireframeMesh.visible = false;
+              break;
+            case "wireframe":
+              terrainMesh.visible = false;
+              wireframeMesh.visible = true;
+              wireframeMesh.material.opacity = 0.8;
+              break;
+            case "both":
+              terrainMesh.visible = true;
+              wireframeMesh.visible = true;
+              wireframeMesh.material.opacity = 0.2;
+              break;
+          }
+        }
+      }
+
+      // Update UI values
+      function updateUIValues() {
+        document.getElementById("heightScaleValue").textContent =
+          config.maxHeight;
+        document.getElementById("erosionValue").textContent =
+          config.erosionIterations;
+      }
+
+      // Event listeners
+      document.getElementById("regenerate").addEventListener("click", () => {
+        config.seed = Math.random() * 1000;
+        initTerrain();
+      });
+
+      document.getElementById("heightScale").addEventListener("input", (e) => {
+        config.maxHeight = parseInt(e.target.value);
+        document.getElementById("heightScaleValue").textContent =
+          config.maxHeight;
+        initTerrain();
+      });
+
+      document
+        .getElementById("erosionAmount")
+        .addEventListener("input", (e) => {
+          config.erosionIterations = parseInt(e.target.value);
+          document.getElementById("erosionValue").textContent =
+            config.erosionIterations;
+          initTerrain();
+        });
+
+      document
+        .getElementById("renderMode")
+        .addEventListener("change", updateRenderMode);
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // Animation loop
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      // Initialize
+      updateUIValues();
+      initTerrain();
+      animate();
+    </script>
+  </body>
+</html>

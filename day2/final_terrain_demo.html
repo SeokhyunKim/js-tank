@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JS-Tank Terrain Demo - Corrected</title>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: white;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 14px;
+        pointer-events: none;
+      }
+      #controls {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        color: white;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 14px;
+      }
+      .slider-container {
+        margin-top: 10px;
+      }
+      .slider-container label {
+        display: inline-block;
+        width: 150px;
+      }
+      .slider-container input {
+        width: 120px;
+        vertical-align: middle;
+      }
+      .slider-container span {
+        display: inline-block;
+        width: 40px;
+        text-align: right;
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@v0.147.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@v0.147.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="info">JS-Tank Terrain Demo - Corrected</div>
+    <div id="controls">
+      <div>Mouse: Left click + drag to rotate</div>
+      <div>Mouse: Right click + drag to pan</div>
+      <div>Mouse wheel: Zoom in/out</div>
+
+      <div class="slider-container">
+        <label for="heightScale">Height Scale:</label>
+        <input
+          type="range"
+          id="heightScale"
+          min="20"
+          max="200"
+          value="80"
+          step="10"
+        />
+        <span id="heightScaleValue">80</span>
+      </div>
+
+      <button id="regenerate">Regenerate Terrain</button>
+      <select id="renderMode">
+        <option value="solid">Solid</option>
+        <option value="wireframe">Wireframe</option>
+        <option value="both">Both</option>
+      </select>
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+      // Terrain configuration
+      const config = {
+        gridSize: 128, // Number of vertices per side
+        size: 500, // Physical size (arbitrary units)
+        maxHeight: 80, // Maximum terrain height
+        seed: Math.random() * 1000,
+      };
+
+      // Setup renderer
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x87ceeb); // Sky blue background
+      document.body.appendChild(renderer.domElement);
+
+      // Setup scene
+      const scene = new THREE.Scene();
+
+      // Add axes helper to debug orientation
+      const axesHelper = new THREE.AxesHelper(250);
+      scene.add(axesHelper);
+
+      // Setup camera
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        2000
+      );
+      camera.position.set(250, 200, 250);
+      camera.lookAt(0, 0, 0);
+
+      // Setup orbit controls
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.1;
+      controls.screenSpacePanning = false;
+
+      // Lighting
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      directionalLight.position.set(1, 1, 1);
+      scene.add(directionalLight);
+
+      const ambientLight = new THREE.AmbientLight(0x606060);
+      scene.add(ambientLight);
+
+      // Terrain mesh holder
+      let terrainMesh;
+      let wireframeMesh;
+
+      // A more realistic noise function with multiple frequencies
+      function improvedNoise(x, y, seed) {
+        // Use multiple sine waves at different frequencies for natural-looking terrain
+        const nx = x * 0.01 + seed * 0.1;
+        const ny = y * 0.01 + seed * 0.1;
+
+        // Base large features
+        let height = Math.sin(nx) * Math.cos(ny) * 0.5;
+
+        // Medium details
+        height += Math.sin(nx * 2.3 + ny * 1.5) * 0.25;
+
+        // Small details
+        height += Math.sin(nx * 4.7 + ny * 3.2) * 0.125;
+
+        // Very fine details
+        height += Math.sin(nx * 9.4 + ny * 8.7) * 0.0625;
+
+        return height;
+      }
+
+      // Generate terrain height map
+      function generateTerrainGrid() {
+        const grid = new Float32Array(config.gridSize * config.gridSize);
+
+        // Random offset for this terrain generation
+        const offsetX = Math.random() * 100;
+        const offsetY = Math.random() * 100;
+
+        // Create mountain ridges
+        const ridgeAngle = Math.random() * Math.PI;
+        const ridgeX = Math.cos(ridgeAngle);
+        const ridgeY = Math.sin(ridgeAngle);
+
+        for (let z = 0; z < config.gridSize; z++) {
+          for (let x = 0; x < config.gridSize; x++) {
+            const index = z * config.gridSize + x;
+
+            // Normalize coordinates to -1 to 1 range
+            const nx = (x / config.gridSize) * 2 - 1;
+            const nz = (z / config.gridSize) * 2 - 1;
+
+            // Base height using improved noise
+            let height = improvedNoise(x + offsetX, z + offsetY, config.seed);
+
+            // Add mountain ridge along a random angle
+            const distToRidge = Math.abs(nx * ridgeX + nz * ridgeY);
+            const ridgeValue = Math.max(0, 1 - distToRidge * 2);
+            height += Math.pow(ridgeValue, 3) * 0.7;
+
+            // Add central mountain peak
+            const distFromCenter = Math.sqrt(nx * nx + nz * nz);
+            const centralMountain = Math.max(0, 1 - distFromCenter * 1.5);
+            height += Math.pow(centralMountain, 3) * 1.2;
+
+            // Ensure height is positive
+            height = Math.max(0, height);
+
+            // Scale to desired max height
+            grid[index] = height * config.maxHeight;
+          }
+        }
+
+        return {
+          heightMap: grid,
+          width: config.gridSize,
+          height: config.gridSize,
+        };
+      }
+
+      // Create terrain mesh from grid data - CORRECTED VERSION
+      function createTerrainMesh(terrainData) {
+        // 1. Create a flat plane geometry with the desired resolution
+        const geometry = new THREE.PlaneGeometry(
+          config.size,
+          config.size,
+          config.gridSize - 1,
+          config.gridSize - 1
+        );
+
+        // 2. IMPORTANT: First rotate the plane to be horizontal (XZ plane)
+        geometry.rotateX(-Math.PI / 2);
+
+        // 3. Get access to the vertex positions
+        const positionAttribute = geometry.getAttribute("position");
+
+        // Track height range for debugging
+        let minHeight = Infinity;
+        let maxHeight = -Infinity;
+
+        // 4. Apply height values to the Y component (up direction)
+        for (let i = 0; i < positionAttribute.count; i++) {
+          // Get the current position
+          const x = positionAttribute.getX(i);
+          const y = positionAttribute.getY(i);
+          const z = positionAttribute.getZ(i);
+
+          // Convert world coordinates to grid coordinates
+          const gridX = Math.round(
+            (x / config.size + 0.5) * (config.gridSize - 1)
+          );
+          const gridZ = Math.round(
+            (z / config.size + 0.5) * (config.gridSize - 1)
+          );
+
+          // Ensure grid coordinates are within bounds
+          if (
+            gridX >= 0 &&
+            gridX < config.gridSize &&
+            gridZ >= 0 &&
+            gridZ < config.gridSize
+          ) {
+            const heightIndex = gridZ * config.gridSize + gridX;
+            const height = terrainData.heightMap[heightIndex];
+
+            // Apply height to Y coordinate (up direction after rotation)
+            positionAttribute.setY(i, height);
+
+            // Track min/max height for debugging
+            minHeight = Math.min(minHeight, height);
+            maxHeight = Math.max(maxHeight, height);
+          }
+        }
+
+        console.log(
+          `Height range: ${minHeight.toFixed(2)} to ${maxHeight.toFixed(2)}`
+        );
+
+        // 5. Update normals for proper lighting
+        geometry.computeVertexNormals();
+
+        // 6. Create material with color variation based on height
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          flatShading: false,
+          metalness: 0.0,
+          roughness: 0.8,
+        });
+
+        // 7. Add vertex colors based on height
+        const colors = [];
+
+        for (let i = 0; i < positionAttribute.count; i++) {
+          const height = positionAttribute.getY(i);
+          let color = new THREE.Color();
+
+          // Water (blue)
+          if (height < config.maxHeight * 0.2) {
+            color.setRGB(0.2, 0.3, 0.9);
+          }
+          // Sand (tan)
+          else if (height < config.maxHeight * 0.3) {
+            color.setRGB(0.76, 0.7, 0.5);
+          }
+          // Grass (green)
+          else if (height < config.maxHeight * 0.5) {
+            color.setRGB(0.3, 0.6, 0.2);
+          }
+          // Mountain (brown/gray)
+          else if (height < config.maxHeight * 0.8) {
+            color.setRGB(0.5, 0.5, 0.4);
+          }
+          // Snow cap (white)
+          else {
+            color.setRGB(0.9, 0.9, 0.95);
+          }
+
+          colors.push(color.r, color.g, color.b);
+        }
+
+        geometry.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(colors, 3)
+        );
+
+        // 8. Create and return the mesh
+        const mesh = new THREE.Mesh(geometry, material);
+
+        return mesh;
+      }
+
+      // Create wireframe version
+      function createWireframeMesh(terrainMesh) {
+        const wireGeom = terrainMesh.geometry.clone();
+        const wireMat = new THREE.MeshBasicMaterial({
+          color: 0x000000,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.2,
+        });
+        const wire = new THREE.Mesh(wireGeom, wireMat);
+        return wire;
+      }
+
+      // Generate and display terrain
+      function initTerrain() {
+        // Remove existing terrain if any
+        if (terrainMesh) {
+          scene.remove(terrainMesh);
+          terrainMesh.geometry.dispose();
+          terrainMesh.material.dispose();
+        }
+
+        if (wireframeMesh) {
+          scene.remove(wireframeMesh);
+          wireframeMesh.geometry.dispose();
+          wireframeMesh.material.dispose();
+        }
+
+        // Generate new terrain
+        const terrainData = generateTerrainGrid();
+
+        // Create and add terrain mesh
+        terrainMesh = createTerrainMesh(terrainData);
+        scene.add(terrainMesh);
+
+        // Create wireframe
+        wireframeMesh = createWireframeMesh(terrainMesh);
+        wireframeMesh.visible = false; // Hide by default
+        scene.add(wireframeMesh);
+
+        updateRenderMode();
+      }
+
+      // Update rendering mode (solid, wireframe, both)
+      function updateRenderMode() {
+        const mode = document.getElementById("renderMode").value;
+
+        if (terrainMesh && wireframeMesh) {
+          switch (mode) {
+            case "solid":
+              terrainMesh.visible = true;
+              wireframeMesh.visible = false;
+              break;
+            case "wireframe":
+              terrainMesh.visible = false;
+              wireframeMesh.visible = true;
+              wireframeMesh.material.opacity = 0.8;
+              break;
+            case "both":
+              terrainMesh.visible = true;
+              wireframeMesh.visible = true;
+              wireframeMesh.material.opacity = 0.2;
+              break;
+          }
+        }
+      }
+
+      // Update UI values
+      function updateUIValues() {
+        document.getElementById("heightScaleValue").textContent =
+          config.maxHeight;
+      }
+
+      // Event listeners
+      document.getElementById("regenerate").addEventListener("click", () => {
+        config.seed = Math.random() * 1000;
+        initTerrain();
+      });
+
+      document.getElementById("heightScale").addEventListener("input", (e) => {
+        config.maxHeight = parseInt(e.target.value);
+        document.getElementById("heightScaleValue").textContent =
+          config.maxHeight;
+        initTerrain();
+      });
+
+      document
+        .getElementById("renderMode")
+        .addEventListener("change", updateRenderMode);
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // Animation loop
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      // Initialize
+      updateUIValues();
+      initTerrain();
+      animate();
+    </script>
+  </body>
+</html>
